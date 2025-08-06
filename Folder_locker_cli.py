@@ -2,7 +2,6 @@ import os
 import json
 import getpass
 import hashlib
-import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -10,10 +9,8 @@ import cv2
 
 # === CONFIGURATION ===
 LOCK_INFO_FILE = "lock_info.json"
-HIDDEN_FOLDER_BASE = "C:\\hidden_krijal"
 LOG_FOLDER = "Security_Logs"
 
-os.makedirs(HIDDEN_FOLDER_BASE, exist_ok=True)
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
 # === Utility Functions ===
@@ -48,15 +45,12 @@ def take_photo():
         print("[❌] Webcam access failed.")
     cam.release()
 
-# === Locking & Unlocking Logic ===
+# === Lock & Unlock Functions ===
 def set_lock():
     folder = input("Enter full path of folder to lock: ").strip()
     if not os.path.isdir(folder):
         print("[❌] Invalid folder path.")
         return
-
-    folder_name = os.path.basename(folder)
-    hidden_folder_path = os.path.join(HIDDEN_FOLDER_BASE, folder_name)
 
     locks = load_locks()
     if folder in locks:
@@ -69,14 +63,14 @@ def set_lock():
         print("[❌] Passwords do not match.")
         return
 
-    shutil.move(folder, hidden_folder_path)
+    # Lock using attrib and icacls
+    os.system(f'attrib +h +s "{folder}"')
+    os.system(f'icacls "{folder}" /deny Everyone:(OI)(CI)F')
 
-    locks[folder] = {
-        "real_path": hidden_folder_path,
-        "password": hash_password(pwd1)
-    }
+    locks[folder] = hash_password(pwd1)
     save_locks(locks)
-    print("[✅] Folder locked successfully.")
+
+    print("[✅] Folder locked and hidden successfully.")
 
 def unlock_folder():
     locks = load_locks()
@@ -85,8 +79,8 @@ def unlock_folder():
         return
 
     print("\nLocked folders:")
-    for i, f in enumerate(locks.keys()):
-        print(f"{i+1}. {f}")
+    for i, folder in enumerate(locks.keys()):
+        print(f"{i+1}. {folder}")
     try:
         choice = int(input("Choose a folder to unlock: ")) - 1
         folder = list(locks.keys())[choice]
@@ -94,32 +88,27 @@ def unlock_folder():
         print("[❌] Invalid selection.")
         return
 
-    stored_hash = locks[folder]['password']
-    real_path = locks[folder]['real_path']
+    stored_hash = locks[folder]
     attempts = 3
 
     while attempts > 0:
         pwd = getpass.getpass("Enter password: ")
         if hash_password(pwd) == stored_hash:
+            os.system(f'icacls "{folder}" /grant Everyone:(OI)(CI)F')
+            os.system(f'attrib -h -s "{folder}"')
+
+            print("[✅] Folder unlocked successfully.")
             log_event(f"SUCCESSFUL unlock for folder '{folder}'")
-            shutil.move(real_path, folder)
-            time.sleep(1)
-
-            try:
-                subprocess.Popen(f'explorer "{folder}"')
-                print("[✅] Folder unlocked and opened.")
-            except Exception as e:
-                print(f"[❌] Failed to open folder: {e}")
-
             del locks[folder]
             save_locks(locks)
+            subprocess.Popen(f'explorer "{folder}"')
             return
         else:
             attempts -= 1
-            log_event(f"FAILED unlock attempt for folder '{folder}'. Attempts left: {attempts}")
             print(f"[❌] Incorrect password. Attempts left: {attempts}")
+            log_event(f"FAILED unlock attempt for folder '{folder}'")
 
-    print("🚨 Unauthorized access attempt!")
+    print("🚨 Unauthorized access attempt detected!")
     log_event(f"UNAUTHORIZED access attempt for folder '{folder}'")
     take_photo()
 
